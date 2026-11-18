@@ -5,8 +5,8 @@ Author: Arushi
 """
 
 import math
-from PySide6.QtWidgets import QWidget, QPushButton, QScrollArea
-from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, QSize
+from PySide6.QtWidgets import QWidget, QPushButton, QScrollArea, QLineEdit, QToolTip
+from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, QSize, Signal, QEvent
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QBrush, QPolygonF, QIcon, QPixmap
 from osdagbridge.core.utils.common import *
 from osdagbridge.desktop.cad.irc5_geometry import (
@@ -14,10 +14,12 @@ from osdagbridge.desktop.cad.irc5_geometry import (
     RailingGeometry,
     MedianGeometry,
 )
+from .cad_editor_mixin import CADDimensionEditorMixin
 
 
-class CrossSectionCADWidget(QWidget):
+class CrossSectionCADWidget(CADDimensionEditorMixin, QWidget):
     """Widget for drawing bridge cross-section view"""
+    parameter_changed = Signal(str, float, str)  # (param_key, value, unit)
     # ===== SHARED CAD COLORS =====
     GIRDER_COLOR = QColor(179, 180, 160) 
     STIFFENER_COLOR = QColor(210, 210, 205)
@@ -36,8 +38,9 @@ class CrossSectionCADWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.show_dimensions = True
-        self.show_span_values = False
-        self.show_carriageway_values = False
+        self.show_span_values = True
+        self.show_carriageway_values = True
+        self._init_dimension_editor()
         self.setMouseTracking(True)  # enable mouse tracking for hover
         self.concrete_brush = self.create_concrete_brush()
         self.crash_barrier_params = {}
@@ -720,7 +723,27 @@ class CrossSectionCADWidget(QWidget):
             self.hovered_element = new_hovered_element
             self.update()
 
-        
+    def mouseDoubleClickEvent(self, event):
+        """Handle double-click for interactive dimension editing."""
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        if self.handle_double_click_hit(pos):
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _apply_parameter_edit(self, param_key: str, new_val: float, unit: str):
+        """Apply parameter change to internal CAD params and emit parameter_changed signal."""
+        if param_key == "carriageway_width":
+            self.params['carriageway_width'] = new_val * 1000.0
+            self.show_carriageway_values = True
+        elif param_key == "girder_spacing":
+            self.params['girder_spacing'] = new_val * 1000.0
+            self.show_carriageway_values = True
+        elif param_key == "deck_thickness":
+            self.params['deck_thickness'] = new_val
+            self.show_carriageway_values = True
+        self.update()
+        self.parameter_changed.emit(param_key, new_val, unit)
+
     def paintEvent(self, event):
         # Position buttons on first paint if not done yet
         if hasattr(self, 'zoom_in_btn') and not hasattr(self, '_buttons_positioned'):
@@ -729,6 +752,7 @@ class CrossSectionCADWidget(QWidget):
         # clear hover labels and zones at start of each paint
         self.hover_labels = []
         self.cross_section_hover_zones = []
+        self._dimension_hitboxes = []
         
         painter = QPainter(self)
         try:
@@ -739,9 +763,11 @@ class CrossSectionCADWidget(QWidget):
             print(" PAINT ERROR:", repr(e))
         finally:
             painter.end() 
+
     def draw_text_with_background(self, painter, x, y, text,
                                bg_color=QColor(255, 255, 255, 230), 
-                               text_color=QColor(0, 0, 0), font_size=9, bold=False):
+                               text_color=QColor(0, 0, 0), font_size=9, bold=False,
+                               param_info=None):
 
         # defensive check: font size must be > 0
         font_size = max(1, font_size)
@@ -767,6 +793,21 @@ class CrossSectionCADWidget(QWidget):
             total_height + 2 * padding
         )
 
+        if param_info:
+            hb = dict(param_info)
+            hb["rect"] = bg_rect
+            hb["text_x"] = x
+            hb["text_y"] = y
+            self._dimension_hitboxes.append(hb)
+
+        # If this parameter is currently being edited, suppress text and background drawing
+        if self._active_edit_param and param_info:
+            active_key = str(self._active_edit_param).strip().lower()
+            curr_key = str(param_info.get("param_key", "")).strip().lower()
+            curr_name = str(param_info.get("display_name", "")).strip().lower()
+            if active_key in (curr_key, curr_name) or curr_key in active_key or (active_key and active_key in curr_name):
+                return
+
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(bg_color))
         painter.drawRect(bg_rect)
@@ -779,7 +820,7 @@ class CrossSectionCADWidget(QWidget):
             painter.drawText(int(x), int(first_line_y + i * line_height), line)
 
     
-    def draw_dimension_arrow(self, painter, x1, y1, x2, y2, text, horizontal=True, offset=0, text_offset=0, draw_extensions=True, extension_direction='down', extension_end_y=None):
+    def draw_dimension_arrow(self, painter, x1, y1, x2, y2, text, horizontal=True, offset=0, text_offset=0, draw_extensions=True, extension_direction='down', extension_end_y=None, param_info=None):
         """dimension line with arrows and text with extension lines"""
         painter.setPen(QPen(QColor(0, 0, 0), 0.8))
         
@@ -847,7 +888,8 @@ class CrossSectionCADWidget(QWidget):
             text_width = metrics.boundingRect(text).width()
             
             self.draw_text_with_background(painter, text_x - text_width/2, text_y, text, 
-                                        QColor(255, 255, 255, 255), QColor(0, 0, 0), 9, False)
+                                        QColor(255, 255, 255, 255), QColor(0, 0, 0), 9, False,
+                                        param_info=param_info)
         else:
             top_arrow = [
                 QPointF(x1, y1),
@@ -884,7 +926,8 @@ class CrossSectionCADWidget(QWidget):
 
             
             self.draw_text_with_background(painter, text_x, text_y, text,
-                                        QColor(255, 255, 255, 255), QColor(0, 0, 0), 9, False)
+                                        QColor(255, 255, 255, 255), QColor(0, 0, 0), 9, False,
+                                        param_info=param_info)
             painter.restore()
 
     
@@ -2078,7 +2121,14 @@ class CrossSectionCADWidget(QWidget):
             QColor(255, 255, 255, 255),
             QColor(0, 0, 0),
             9,
-            False
+            False,
+            param_info={
+                "param_key": "overall_bridge_width",
+                "display_name": "Overall Bridge Width",
+                "is_locked": True,
+                "value": total_width_m,
+                "unit": "m",
+            }
         )
 
         # LEVEL 2: Footpath dimensions
@@ -2115,6 +2165,13 @@ class CrossSectionCADWidget(QWidget):
         
         if median_present and median_start_x is not None and median_end_x is not None:
             cw_m = self.params['carriageway_width'] / 1000
+            cw_info = {
+                "param_key": "carriageway_width",
+                "display_name": "Carriageway Width",
+                "is_locked": False,
+                "value": cw_m,
+                "unit": "m",
+            }
             
             # Left carriageway - starts exactly at left barrier visual end
             label_cw = "Carriageway Width"
@@ -2124,7 +2181,8 @@ class CrossSectionCADWidget(QWidget):
             self.draw_dimension_arrow(painter, actual_cw_start, Y_TOP_COMMON, median_start_x, Y_TOP_COMMON,
                                     label_cw, True, 
                                     extension_direction='down',
-                                    extension_end_y=deck_top_y)
+                                    extension_end_y=deck_top_y,
+                                    param_info=cw_info)
             
             # Median dimension
             median_m = median_width / 1000
@@ -2141,10 +2199,18 @@ class CrossSectionCADWidget(QWidget):
             self.draw_dimension_arrow(painter, median_end_x, Y_TOP_COMMON, actual_cw_end, Y_TOP_COMMON,
                                     label_cw, True, 
                                     extension_direction='down',
-                                    extension_end_y=deck_top_y)
+                                    extension_end_y=deck_top_y,
+                                    param_info=cw_info)
         else:
             # Single carriageway
             cw_m = self.params['carriageway_width'] / 1000
+            cw_info = {
+                "param_key": "carriageway_width",
+                "display_name": "Carriageway Width",
+                "is_locked": False,
+                "value": cw_m,
+                "unit": "m",
+            }
             # From left barrier visual end to right barrier visual start
             label_cw = "Carriageway Width"
             if self.show_carriageway_values:
@@ -2153,7 +2219,8 @@ class CrossSectionCADWidget(QWidget):
             self.draw_dimension_arrow(painter, actual_cw_start, Y_TOP_COMMON, actual_cw_end, Y_TOP_COMMON,
                                     label_cw, True, 
                                     extension_direction='down',
-                                    extension_end_y=deck_top_y)
+                                    extension_end_y=deck_top_y,
+                                    param_info=cw_info)
         
         # Right footpath dimension
         if right_railing_present and right_fp_width > 0:
@@ -2188,7 +2255,14 @@ class CrossSectionCADWidget(QWidget):
             self.draw_dimension_arrow(painter, deck_left_x, Y_OVERHANG, first_girder_x, Y_OVERHANG,
                                     label_overhang, True,
                                     extension_direction='up',
-                                    extension_end_y=deck_bottom_y)
+                                    extension_end_y=deck_bottom_y,
+                                    param_info={
+                                        "param_key": "overhang",
+                                        "display_name": "Overhang",
+                                        "is_locked": True,
+                                        "value": overhang_m,
+                                        "unit": "m",
+                                    })
         
         # Girder spacing
         if n > 1 and len(positions) >= 2:
@@ -2208,7 +2282,14 @@ class CrossSectionCADWidget(QWidget):
             self.draw_dimension_arrow(painter, x_left, Y_GIRDER_SPACING, x_right, Y_GIRDER_SPACING,
                                     label_gs, True, 
                                     extension_direction='up',
-                                    extension_end_y=base_y)
+                                    extension_end_y=base_y,
+                                    param_info={
+                                        "param_key": "girder_spacing",
+                                        "display_name": "Girder Spacing",
+                                        "is_locked": False,
+                                        "value": gs_m,
+                                        "unit": "m",
+                                    })
         
         # FOOTPATH THICKNESS DIMENSION 
         fp_t_mm = self.params['footpath_thickness']
@@ -2285,8 +2366,17 @@ class CrossSectionCADWidget(QWidget):
             text_x = deck_center_x - text_width / 2
             text_y = local_deck_top_y - 8
             
-            self.draw_text_with_background(painter, text_x, text_y, text,
-                                        QColor(255, 255, 255, 255), QColor(0, 0, 0), 9, False)
+            self.draw_text_with_background(
+                painter, text_x, text_y, text,
+                QColor(255, 255, 255, 255), QColor(0, 0, 0), 9, False,
+                param_info={
+                    "param_key": "deck_thickness",
+                    "display_name": "Deck Thickness",
+                    "is_locked": False,
+                    "value": deck_t_mm,
+                    "unit": "mm",
+                }
+            )
     def add_cross_section_hover_labels(self, painter, carriageway_start_x, carriageway_end_x,
                     left_barrier_x, right_barrier_x, deck_top_y, deck_bottom_y,
                     deck_thick_px, positions, base_y, scale, n, fp_config,

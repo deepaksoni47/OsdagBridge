@@ -351,6 +351,7 @@ class CustomWindow(QWidget):
             QSizePolicy.Expanding, QSizePolicy.Expanding
         )
         self.cad_log_splitter.addWidget(self.cad_comp_widget)
+        self.cad_comp_widget.cad_parameter_edited.connect(self._handle_cad_parameter_edit)
 
         # from osdagbridge.desktop.ui.cad_3d import CAD3DWindow
         # 3D CAD placeholder (mutually exclusive with dual view + plots)
@@ -456,6 +457,81 @@ class CustomWindow(QWidget):
             # This is updated directly because 
             # there is some mapping that takes place in BridgeDualCADWidget which can worst the things
             self.cad_comp_widget.cross_section_widget.update_params(cad_state)
+
+    def _handle_cad_parameter_edit(self, param_key: str, value: float, unit: str):
+        """
+        Handle parameter modifications from in-place 2D CAD editing.
+        Synchronizes input_dict, InputDock widgets, solver layout, and AdditionalInputs.
+        """
+        if param_key == "carriageway_width":
+            self.input_dict[KEY_CARRIAGEWAY_WIDTH] = value
+            if self.input_dock:
+                w = self.input_dock.input_widget.findChild(QLineEdit, KEY_CARRIAGEWAY_WIDTH)
+                if w:
+                    w.blockSignals(True)
+                    w.setText(f"{value:.2f}")
+                    w.blockSignals(False)
+            try:
+                solve_extend_basic_input_dict(self.input_dict)
+            except Exception:
+                pass
+            if self._additional_inputs_dialog:
+                self._additional_inputs_dialog.set_input_dictionary(self.input_dict)
+            self.cad_comp_widget.update_from_osdag_inputs(self.input_dict)
+
+        elif param_key == "span_length":
+            self.input_dict[KEY_SPAN] = value
+            if self.input_dock:
+                w = self.input_dock.input_widget.findChild(QLineEdit, KEY_SPAN)
+                if w:
+                    w.blockSignals(True)
+                    w.setText(f"{value:.1f}")
+                    w.blockSignals(False)
+            try:
+                solve_extend_basic_input_dict(self.input_dict)
+            except Exception:
+                pass
+            if self._additional_inputs_dialog:
+                self._additional_inputs_dialog.set_input_dictionary(self.input_dict)
+            self.cad_comp_widget.update_from_osdag_inputs(self.input_dict)
+
+        elif param_key == "girder_spacing":
+            self.input_dict[KEY_TS_GIRDER_SPACING] = value
+            self.input_dict["_girder_spacing_customized"] = True
+            try:
+                solve_extend_basic_input_dict(self.input_dict)
+            except Exception:
+                overall_w = float(self.input_dict.get(KEY_TS_OVERALL_WIDTH, 11.4))
+                n = int(self.input_dict.get(KEY_TS_NO_OF_GIRDERS, 4))
+                self.input_dict[KEY_TS_DECK_OVERHANG] = (overall_w - (n - 1) * value) / 2.0
+
+            if self._additional_inputs_dialog:
+                self._additional_inputs_dialog.working_input_dict[KEY_TS_GIRDER_SPACING] = str(value)
+                self._additional_inputs_dialog.working_input_dict[KEY_TS_DECK_OVERHANG] = str(self.input_dict.get(KEY_TS_DECK_OVERHANG, ""))
+                self._additional_inputs_dialog.default_input_dict[KEY_TS_GIRDER_SPACING] = str(value)
+                self._additional_inputs_dialog.default_input_dict[KEY_TS_DECK_OVERHANG] = str(self.input_dict.get(KEY_TS_DECK_OVERHANG, ""))
+                w_gs = self._additional_inputs_dialog.findChild(QLineEdit, KEY_TS_GIRDER_SPACING)
+                if w_gs:
+                    w_gs.setText(str(value))
+                w_oh = self._additional_inputs_dialog.findChild(QLineEdit, KEY_TS_DECK_OVERHANG)
+                if w_oh:
+                    oh_val = self.input_dict.get(KEY_TS_DECK_OVERHANG)
+                    if isinstance(oh_val, (int, float)):
+                        w_oh.setText(f"{oh_val:.3f}")
+                    else:
+                        w_oh.setText(str(oh_val))
+
+            self.cad_comp_widget.update_from_osdag_inputs(self.input_dict)
+
+        elif param_key == "deck_thickness":
+            self.input_dict[KEY_TS_DECK_THICKNESS] = value
+            if self._additional_inputs_dialog:
+                self._additional_inputs_dialog.working_input_dict[KEY_TS_DECK_THICKNESS] = str(value)
+                self._additional_inputs_dialog.default_input_dict[KEY_TS_DECK_THICKNESS] = str(value)
+                w_dt = self._additional_inputs_dialog.findChild(QLineEdit, KEY_TS_DECK_THICKNESS)
+                if w_dt:
+                    w_dt.setText(str(int(value) if isinstance(value, float) and value.is_integer() else value))
+            self.cad_comp_widget.update_from_osdag_inputs(self.input_dict)
 
     def _show_additional_inputs(self, target_tab: str | None = None):
         """
@@ -748,7 +824,10 @@ class CustomWindow(QWidget):
                     loadcases = self.backend.get_available_loadcases()
                     nodes, members = self.backend.get_nodes_members()
                     edge_dist = self.backend.get_edge_dist()
-                    self.plots_widget.setup(ds_all, loadcases, nodes, members, edge_dist=edge_dist)
+                    res_data = getattr(self.backend, "result_data", None)
+                    if res_data is None and hasattr(self.backend, "get_result_data"):
+                        res_data = self.backend.get_result_data()
+                    self.plots_widget.setup(ds_all, loadcases, nodes, members, edge_dist=edge_dist, result_data=res_data)
                     self.plots_widget.link_output_dock(self.output_dock)
 
                     # Render 3D cad using the parameters from Backend

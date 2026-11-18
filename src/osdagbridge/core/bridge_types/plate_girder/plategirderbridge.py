@@ -719,6 +719,7 @@ class PlateGirderBridge:
             # get_result_data, plots, output dock) reads that cached dataset, so
             # holding the records through stages 5-8 only inflates the peak RSS.
             self.memory.clear_intermediate_results()
+            self.result_data = self.grillage_model.get_result_data()
             
             # Print Summary
             inp = self.input_dict
@@ -3230,6 +3231,17 @@ class PlateGirderBridge:
     def get_results(self) -> dict:
         """Return the dictionary of design check outputs and results."""
         return dict(self.output_dict)
+
+    def get_result_data(self) -> dict | None:
+        """Return the post-processed grillage result data dictionary."""
+        if hasattr(self, "result_data") and self.result_data:
+            return self.result_data
+        if hasattr(self, "grillage_model") and self.grillage_model is not None:
+            try:
+                return self.grillage_model.get_result_data()
+            except Exception:
+                return None
+        return None
 
     # ─────────────────────────────────────────────────────────────────────────
     # 2-D analysis result factory

@@ -117,8 +117,13 @@ class RichCheckBox(QCheckBox):
     def _doc(self) -> QTextDocument:
         """Build a QTextDocument from the rich text."""
         doc = QTextDocument()
-        doc.setDefaultFont(self.font())
-        doc.setHtml(self._rich_text)
+        font = self.font()
+        font.setPointSize(10)
+        font.setFamily("Arial")
+        doc.setDefaultFont(font)
+        color = "#1f2937" if self.isEnabled() else "#9e9e9e"
+        html = f"<div style='color:{color}; font-family:Arial,sans-serif; font-size:11px; font-weight:bold;'>{self._rich_text}</div>"
+        doc.setHtml(html)
         return doc
 
     def sizeHint(self) -> QSize:
@@ -365,8 +370,13 @@ class CustomRadioButton(QRadioButton):
  
     def _doc(self) -> QTextDocument:
         doc = QTextDocument()
-        doc.setDefaultFont(self.font())
-        doc.setHtml(self._rich_text)
+        font = self.font()
+        font.setPointSize(10)
+        font.setFamily("Arial")
+        doc.setDefaultFont(font)
+        color = "#1f2937" if self.isEnabled() else "#9e9e9e"
+        html = f"<div style='color:{color}; font-family:Arial,sans-serif; font-size:11px; font-weight:bold;'>{self._rich_text}</div>"
+        doc.setHtml(html)
         return doc
  
     # ── Paint ────────────────────────────────────────────────────────────────
@@ -409,7 +419,8 @@ class CustomRadioButton(QRadioButton):
  
         if self._is_rich():
             doc = self._doc()
-            doc.setTextWidth(self.width() - text_x)
+            avail_w = max(self.width() - text_x, 40)
+            doc.setTextWidth(avail_w)
             text_h = int(doc.size().height())
             text_y = (self.height() - text_h) // 2
  
@@ -422,7 +433,7 @@ class CustomRadioButton(QRadioButton):
  
         else:
             text_rect = QRect(text_x, 0, self.width() - text_x, self.height())
-            painter.setPen(QColor("#1a1a1a") if self.isEnabled() else QColor("#9e9e9e"))
+            painter.setPen(QColor("#1f2937") if self.isEnabled() else QColor("#9e9e9e"))
             painter.setFont(self.font())
             painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, self._rich_text)
  
@@ -439,14 +450,14 @@ class CustomRadioButton(QRadioButton):
             doc = self._doc()
             doc.setTextWidth(-1)
             text_size = doc.size()
-            text_w = int(text_size.width())
+            text_w = max(int(text_size.width()), 25)
             text_h = int(text_size.height())
         else:
             fm     = QFontMetrics(self.font())
             text_w = fm.horizontalAdvance(self._rich_text)
             text_h = fm.height()
  
-        total_width  = offset + s + self.SPACING + text_w + offset
+        total_width  = max(offset + s + self.SPACING + text_w + offset, 50)
         total_height = max(s + pw * 2, text_h) + self.V_PADDING
         return QSize(total_width, total_height)
  

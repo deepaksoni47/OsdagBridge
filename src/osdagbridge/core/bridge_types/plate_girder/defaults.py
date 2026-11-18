@@ -916,7 +916,19 @@ def solve_extend_basic_input_dict(basic_input_dict: dict) -> None:
         basic_input_dict.get(KEY_TS_NO_OF_GIRDERS)
         or seed_no_of_girders(solver.calculate_overall_bridge_width())
     )
-    sizing_result = solver._solve_layout(no_of_girders=no_of_girders, changed_field='girders')
+    user_spacing = basic_input_dict.get(KEY_TS_GIRDER_SPACING)
+    if basic_input_dict.get("_girder_spacing_customized") and user_spacing is not None:
+        try:
+            spacing_val = float(user_spacing)
+            sizing_result = solver._solve_layout(
+                no_of_girders=no_of_girders,
+                girder_spacing=spacing_val,
+                changed_field='spacing'
+            )
+        except Exception:
+            sizing_result = solver._solve_layout(no_of_girders=no_of_girders, changed_field='girders')
+    else:
+        sizing_result = solver._solve_layout(no_of_girders=no_of_girders, changed_field='girders')
 
     print("[DEBUG] Bridge Layout Sizing Result:")
     print(f"  overall_width = {sizing_result.overall_width} m")

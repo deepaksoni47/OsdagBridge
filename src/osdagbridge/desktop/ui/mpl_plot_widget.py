@@ -140,19 +140,35 @@ class SummaryOverlay(QFrame):
         title = "Extreme Values Summary"
         if unit:
             title += f" ({unit})"
-        hud_text = f"<b>{title}</b><br>" + "-" * 38 + "<br>"
 
-        h_girder = "Girder".ljust(8).replace(" ", "&nbsp;")
+        is_member = any(" " in k or len(k) > 4 for k in summary_data)
+        col_w = max(8, min(16, max(len(k) for k in summary_data))) if summary_data else 8
+        h_col = ("Member" if is_member else "Girder").ljust(col_w).replace(" ", "&nbsp;")
         h_max = "Max".rjust(10).replace(" ", "&nbsp;")
         h_min = "Min".rjust(12).replace(" ", "&nbsp;")
-        
-        hud_text += f"<b>{h_girder}</b> | <span style='color: #FF4136;'><b>{h_max}</b></span> | <span style='color: #00E5FF;'><b>{h_min}</b></span><br>" + "-" * 38 + "<br>"
+        dash_len = col_w + 26
+        divider = "-" * dash_len + "<br>"
 
-        for girder, vals in summary_data.items():
-            g_str = girder.ljust(8).replace(" ", "&nbsp;")
+        hud_text = f"<b>{title}</b><br>{divider}"
+        hud_text += f"<b>{h_col}</b> | <span style='color: #FF4136;'><b>{h_max}</b></span> | <span style='color: #00E5FF;'><b>{h_min}</b></span><br>{divider}"
+
+        if len(summary_data) > 8:
+            all_max = max(vals["max"] for vals in summary_data.values())
+            all_min = min(vals["min"] for vals in summary_data.values())
+            gov_str = "Overall".ljust(col_w).replace(" ", "&nbsp;")
+            gov_max = f"{all_max:.2f}".rjust(10).replace(" ", "&nbsp;")
+            gov_min = f"{all_min:.2f}".rjust(12).replace(" ", "&nbsp;")
+            hud_text += f"<b>{gov_str}</b> | <span style='color: #FF4136;'>{gov_max}</span> | <span style='color: #00E5FF;'>{gov_min}</span><br>{divider}"
+
+            sorted_by_abs = sorted(summary_data.items(), key=lambda it: max(abs(it[1]["max"]), abs(it[1]["min"])), reverse=True)
+            display_items = sorted_by_abs[:6]
+        else:
+            display_items = list(summary_data.items())
+
+        for name, vals in display_items:
+            g_str = name[:col_w].ljust(col_w).replace(" ", "&nbsp;")
             max_str = f"{vals['max']:.2f}".rjust(10).replace(" ", "&nbsp;")
             min_str = f"{vals['min']:.2f}".rjust(12).replace(" ", "&nbsp;")
-            
             hud_text += f"<b>{g_str}</b> | <span style='color: #FF4136;'>{max_str}</span> | <span style='color: #00E5FF;'>{min_str}</span><br>"
 
         self.text_label.setText(hud_text)
@@ -339,6 +355,7 @@ class MplPlotWidget(QWidget):
         self._loadcases = []
         self._nodes     = {}
         self._members   = {}
+        self._result_data = None
         self._output_dock = None
         self._summary_data = {}
         self._cb_max = None
@@ -407,12 +424,13 @@ class MplPlotWidget(QWidget):
                     pass
 
     def setup(self, ds_all, loadcases: list, nodes: dict, members: dict,
-              edge_dist: float = 0.0):
-        self._ds_all    = ds_all
-        self._loadcases = list(loadcases)
-        self._nodes     = nodes
-        self._members   = members
-        self._edge_dist = edge_dist
+              edge_dist: float = 0.0, result_data: dict | None = None):
+        self._ds_all      = ds_all
+        self._loadcases   = list(loadcases)
+        self._nodes       = nodes
+        self._members     = members
+        self._edge_dist   = edge_dist
+        self._result_data = result_data
 
         if hasattr(self, '_fig') and self._fig.axes:
             ax = self._fig.axes[0]
@@ -542,19 +560,19 @@ class MplPlotWidget(QWidget):
             self._fig, self._summary_data = build_figure_sfd(
                 ds, force_key, self._nodes, self._members,
                 edge_dist=self._edge_dist, eng_scale=eng_scale,
-                selected_girder=sel_girder
+                selected_girder=sel_girder, result_data=self._result_data
             )
         elif force_key in _DEFL_KEYS:
             self._fig, self._summary_data = build_figure_deflection(
                 ds, force_key, self._nodes, self._members,
                 edge_dist=self._edge_dist, eng_scale=eng_scale,
-                selected_girder=sel_girder
+                selected_girder=sel_girder, result_data=self._result_data
             )
         else:
             self._fig, self._summary_data = build_figure_bmd(
                 ds, force_key, self._nodes, self._members,
                 edge_dist=self._edge_dist, eng_scale=eng_scale,
-                selected_girder=sel_girder
+                selected_girder=sel_girder, result_data=self._result_data
             )
 
         self._attach_figure(self._fig)
@@ -716,7 +734,7 @@ class MplPlotWidget(QWidget):
                 old_azim = self._fig.axes[0].azim
             plt.close(self._fig)
             sel_girder = self._current_member()
-            self._fig = build_figure_grillage(self._nodes, self._members, edge_dist=self._edge_dist, selected_girder=sel_girder)
+            self._fig = build_figure_grillage(self._nodes, self._members, edge_dist=self._edge_dist, selected_girder=sel_girder, result_data=self._result_data)
             self._attach_figure(self._fig)
             if self._fig.axes and old_elev is not None and old_azim is not None:
                 self._fig.axes[0].view_init(elev=old_elev, azim=old_azim)

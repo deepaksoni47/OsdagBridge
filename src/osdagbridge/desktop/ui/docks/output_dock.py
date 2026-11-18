@@ -284,6 +284,7 @@ class OutputDock(QWidget):
 
             elif ftype == TYPE_CHECKBOX:
                 cb = QCheckBox(label or "")
+                cb.setStyleSheet("color: #1f2937; font-size: 11px; font-weight: 500;")
                 cb.setObjectName(key)
                 target.addWidget(cb)
             
@@ -467,8 +468,9 @@ class OutputDock(QWidget):
             for col, col_items in enumerate(columns):
                 if row < len(col_items):
                     cb = RichCheckBox(str(col_items[row]))
+                    cb.setMinimumWidth(65)
                     all_cbs.append(cb)
-                    grid.addWidget(cb, row, col, alignment=Qt.AlignCenter)
+                    grid.addWidget(cb, row, col, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
         outer.addLayout(grid)
 
@@ -510,12 +512,26 @@ class OutputDock(QWidget):
             grid.setColumnStretch(c, 1)
     
         num_rows = max((len(col) for col in columns), default=0)
+        from PySide6.QtWidgets import QButtonGroup
+        bg = QButtonGroup(self)
+        btn_idx = 0
         for row in range(num_rows):
             for col, col_items in enumerate(columns):
                 if row < len(col_items):
                     rb = CustomRadioButton(str(col_items[row]))
+                    rb.setObjectName(f"{key}_{col}_{row}")
+                    rb.setMinimumWidth(55)
                     all_rbs.append(rb)
-                    grid.addWidget(rb, row, col, alignment=Qt.AlignCenter)
+                    bg.addButton(rb, btn_idx)
+                    btn_idx += 1
+                    grid.addWidget(rb, row, col, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+
+        if not hasattr(self, "_radio_groups"):
+            self._radio_groups = {}
+        self._radio_groups[key] = bg
+        if not hasattr(self, "_radio_buttons_map"):
+            self._radio_buttons_map = {}
+        self._radio_buttons_map[key] = all_rbs
     
         outer.addLayout(grid)    
         return outer
@@ -540,6 +556,7 @@ class OutputDock(QWidget):
         cbs: list[QCheckBox] = []
         for text in options:
             cb = QCheckBox(str(text))
+            cb.setStyleSheet("color: #1f2937; font-size: 11px; font-weight: 500;")
             cbs.append(cb)
             row.addWidget(cb)
 
@@ -863,7 +880,8 @@ class OutputDock(QWidget):
         if combo_analysis is not None:
             combo_analysis.blockSignals(True)
             combo_analysis.clear()
-            combo_analysis.addItems(["All"] + items)
+            analysis_items = ["All"] + items + ["End Diaphragms", "Intermediate Cross Bracings"]
+            combo_analysis.addItems(analysis_items)
             combo_analysis.setCurrentIndex(0)
             combo_analysis.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo_analysis.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)

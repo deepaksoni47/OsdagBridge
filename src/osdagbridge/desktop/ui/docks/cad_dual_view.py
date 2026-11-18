@@ -5,7 +5,7 @@ Author: Arushi
 """
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QScrollArea, QHBoxLayout, QPushButton, QLabel
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Signal
 from .cad_cross_section import CrossSectionCADWidget
 from .cad_top_view import TopViewCADWidget
 from osdagbridge.core.utils.common import *
@@ -17,6 +17,7 @@ from osdagbridge.desktop.cad.irc5_geometry import (
 
 class BridgeDualCADWidget(QWidget):
     """Split view widget showing both cross-section and top view with individual controls"""
+    cad_parameter_edited = Signal(str, float, str)  # (param_key, value, unit)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -76,6 +77,21 @@ class BridgeDualCADWidget(QWidget):
         self.splitter.setStretchFactor(1, 1)
         
         layout.addWidget(self.splitter)
+
+        # Wire two-way interactive CAD editing signals
+        self.cross_section_widget.parameter_changed.connect(self._on_cad_parameter_edited)
+        self.top_view_widget.parameter_changed.connect(self._on_cad_parameter_edited)
+
+    def _on_cad_parameter_edited(self, param_key: str, value: float, unit: str):
+        """Handle parameter edit from either child CAD widget."""
+        if param_key == "girder_spacing":
+            self.cross_section_widget.params['girder_spacing'] = value * 1000.0
+            self.cross_section_widget.show_carriageway_values = True
+            self.cross_section_widget.update()
+            self.top_view_widget.params['girder_spacing'] = value * 1000.0
+            self.top_view_widget.show_carriageway_values = True
+            self.top_view_widget.update()
+        self.cad_parameter_edited.emit(param_key, value, unit)
     
     def set_cross_section_visible(self, visible):
         self.cross_visible = visible

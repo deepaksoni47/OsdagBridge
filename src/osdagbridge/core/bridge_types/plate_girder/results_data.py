@@ -1060,3 +1060,223 @@ def _plot_dev(model, ds_all) -> None:
             print(f"[dev plot] {fname} → {out}")
         except Exception as exc:
             print(f"[dev plot] {fname} failed: {exc}")
+
+
+# =============================================================================
+# TRANSVERSE MEMBER EXTRACTION & CLASSIFICATION ROUTING (TASK III)
+# =============================================================================
+
+def extract_transverse_structure_from_mesh(
+    nodes: dict, members: dict, edge_dist: float = 0.0
+) -> tuple[dict, dict, set[int], set[int]]:
+    """
+    Classify elements and build ordered transverse polylines directly from
+    node coordinates and member connectivity.
+
+    Guarantees 100% disjoint classification between longitudinal and transverse
+    element tags, and orders constituent elements across the bridge width (ascending Z).
+
+    Parameters
+    ----------
+    nodes : dict
+        Mapping of node_id (int or str) -> [x, y, z].
+    members : dict
+        Mapping of elem_id (int or str) -> [n1, n2].
+    edge_dist : float
+        Deck overhang distance in metres.
+
+    Returns
+    -------
+    tuple: (end_diaphragms, intermediate_cross_bracings, longitudinal_tags, transverse_tags)
+    """
+    from collections import defaultdict
+    import numpy as np
+
+    longitudinal_tags: set[int] = set()
+    transverse_tags: set[int] = set()
+    elems_by_station = defaultdict(list)
+
+    for eid_raw, (n1, n2) in members.items():
+        eid = int(eid_raw)
+        c1 = nodes.get(n1) or nodes.get(str(n1))
+        c2 = nodes.get(n2) or nodes.get(str(n2))
+        if not c1 or not c2:
+            continue
+
+        dx = abs(c1[0] - c2[0])
+        dy = abs(c1[1] - c2[1])
+        dz = abs(c1[2] - c2[2])
+
+        if dz < 1e-3 and dy < 1e-3:
+            longitudinal_tags.add(eid)
+        elif dx < 1e-3:
+            transverse_tags.add(eid)
+            st_x = round((c1[0] + c2[0]) / 2.0, 3)
+            mz = (c1[2] + c2[2]) / 2.0
+            n_left = n1 if c1[2] <= c2[2] else n2
+            n_right = n2 if c1[2] <= c2[2] else n1
+            elems_by_station[st_x].append((mz, eid, n_left, n_right))
+        else:
+            if dz < dx:
+                longitudinal_tags.add(eid)
+            else:
+                transverse_tags.add(eid)
+                st_x = round((c1[0] + c2[0]) / 2.0, 3)
+                mz = (c1[2] + c2[2]) / 2.0
+                n_left = n1 if c1[2] <= c2[2] else n2
+                n_right = n2 if c1[2] <= c2[2] else n1
+                elems_by_station[st_x].append((mz, eid, n_left, n_right))
+
+    stations = sorted(elems_by_station.keys())
+    if not stations:
+        return {}, {}, longitudinal_tags, transverse_tags
+
+    def _build_line(st_x, name, line_type, index=None):
+        items = elems_by_station[st_x]
+        items.sort(key=lambda it: it[0])
+
+        if line_type == "cross_bracing" and edge_dist > 0 and len(items) > 2:
+            items = items[1:-1]
+
+        members_ordered = [it[1] for it in items]
+        nodes_ordered = []
+        for _, _, nl, nr in items:
+            if not nodes_ordered:
+                nodes_ordered.append(nl)
+            nodes_ordered.append(nr)
+
+        res = {
+            "name": name,
+            "station_x": st_x,
+            "members": members_ordered,
+            "nodes": nodes_ordered,
+            "type": line_type,
+        }
+        if index is not None:
+            res["index"] = index
+        return res
+
+    end_diaphragms = {}
+    end_diaphragms["Start Diaphragm"] = _build_line(stations[0], "Start Diaphragm", "end_diaphragm")
+    if len(stations) > 1:
+        end_diaphragms["End Diaphragm"] = _build_line(stations[-1], "End Diaphragm", "end_diaphragm")
+
+    intermediate_cbs = {}
+    for idx, st_x in enumerate(stations[1:-1], start=1):
+        key = f"CB{idx}"
+        intermediate_cbs[key] = _build_line(
+            st_x, f"Cross Bracing {idx} (x={st_x:.2f}m)", "cross_bracing", index=idx
+        )
+
+    return end_diaphragms, intermediate_cbs, longitudinal_tags, transverse_tags
+
+
+def get_longitudinal_members(data: dict = None, nodes: dict = None, members: dict = None) -> list[int]:
+    """Return all element tags classified as longitudinal members."""
+    if data and "longitudinal_element_tags" in data:
+        return list(data["longitudinal_element_tags"])
+    if data and "longitudinal_members" in data:
+        raw = data["longitudinal_members"]
+        tags = set()
+        for item in raw:
+            if isinstance(item, dict):
+                tags.update(item.get("members", []))
+            elif isinstance(item, (int, str)):
+                tags.add(int(item))
+        if tags:
+            return sorted(tags)
+    if nodes and members:
+        _, _, l_tags, _ = extract_transverse_structure_from_mesh(nodes, members)
+        return sorted(l_tags)
+    return []
+
+
+def get_transverse_members(data: dict = None, nodes: dict = None, members: dict = None) -> list[int]:
+    """Return all element tags classified as transverse members."""
+    if data and "transverse_element_tags" in data:
+        return list(data["transverse_element_tags"])
+    if data and "transverse_members" in data:
+        raw = data["transverse_members"]
+        tags = set()
+        for item in raw:
+            if isinstance(item, dict):
+                tags.update(item.get("members", []))
+            elif isinstance(item, (int, str)):
+                tags.add(int(item))
+        if tags:
+            return sorted(tags)
+    if nodes and members:
+        _, _, _, t_tags = extract_transverse_structure_from_mesh(nodes, members)
+        return sorted(t_tags)
+    return []
+
+
+def get_end_diaphragms(
+    data: dict = None, nodes: dict = None, members: dict = None, edge_dist: float = 0.0
+) -> dict:
+    """Return structured end diaphragms dictionary."""
+    if data and "end_diaphragms" in data and data["end_diaphragms"]:
+        return data["end_diaphragms"]
+    if nodes and members:
+        ed, _, _, _ = extract_transverse_structure_from_mesh(nodes, members, edge_dist=edge_dist)
+        return ed
+    return {}
+
+
+def get_intermediate_cross_bracings(
+    data: dict = None, nodes: dict = None, members: dict = None, edge_dist: float = 0.0
+) -> dict:
+    """Return structured intermediate cross bracings dictionary."""
+    if data and "intermediate_cross_bracings" in data and data["intermediate_cross_bracings"]:
+        return data["intermediate_cross_bracings"]
+    if nodes and members:
+        _, icb, _, _ = extract_transverse_structure_from_mesh(nodes, members, edge_dist=edge_dist)
+        return icb
+    return {}
+
+
+def get_transverse_polylines(
+    data: dict = None,
+    member_selection: str = "End Diaphragms",
+    nodes: dict = None,
+    members: dict = None,
+    edge_dist: float = 0.0,
+) -> list[dict]:
+    """
+    Return the list of ordered transverse polyline structures for plotting.
+
+    Parameters
+    ----------
+    data : dict, optional
+        Analysis results dictionary from restructure_data().
+    member_selection : str
+        'End Diaphragms' or 'Intermediate Cross Bracings' (or specific line key).
+    nodes : dict, optional
+    members : dict, optional
+    edge_dist : float, optional
+
+    Returns
+    -------
+    list of dict
+        Each dict has 'name', 'station_x', 'members', 'nodes', 'type'.
+    """
+    sel = (member_selection or "").strip().lower()
+
+    if "end diaphragm" in sel:
+        ed = get_end_diaphragms(data, nodes=nodes, members=members, edge_dist=edge_dist)
+        # Check if a specific single diaphragm was requested
+        for k, v in ed.items():
+            if sel == k.lower():
+                return [v]
+        return list(ed.values())
+
+    if "intermediate cross bracing" in sel or "cross bracing" in sel:
+        icb = get_intermediate_cross_bracings(data, nodes=nodes, members=members, edge_dist=edge_dist)
+        # Check if a specific single cross bracing was requested (e.g. "CB1")
+        for k, v in icb.items():
+            if sel == k.lower() or sel == v.get("name", "").lower():
+                return [v]
+        return list(icb.values())
+
+    return []
+
